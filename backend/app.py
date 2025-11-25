@@ -3,8 +3,11 @@ from flask_cors import CORS
 import torch
 from transformers import BertTokenizer, BertForSequenceClassification, AdamW
 import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
 import re
 import warnings
+import os
 warnings.filterwarnings('ignore')
 
 app = Flask(__name__)
@@ -14,75 +17,95 @@ MODEL_NAME = "bert-base-uncased"
 tokenizer = None
 model = None
 
-def fine_tune_model(model_to_train):
-    """Fine-tune BERT on fake and real news examples"""
+def load_dataset():
+    """Load fake and real news from CSV files"""
+    try:
+        # Get the directory where this script is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        fake_path = os.path.join(script_dir, 'News _dataset', 'Fake.csv')
+        true_path = os.path.join(script_dir, 'News _dataset', 'True.csv')
+        
+        print(f"Loading fake news from: {fake_path}")
+        print(f"Loading true news from: {true_path}")
+        
+        # Load datasets with error handling for encoding issues
+        fake_df = pd.read_csv(fake_path, engine='python', encoding='utf-8', on_bad_lines='skip')
+        true_df = pd.read_csv(true_path, engine='python', encoding='utf-8', on_bad_lines='skip')
+        
+        print(f"  ✓ Loaded {len(fake_df)} fake news articles")
+        print(f"  ✓ Loaded {len(true_df)} true news articles")
+        
+        # Combine title and text for better context
+        fake_df['combined'] = fake_df['title'].fillna('') + ' ' + fake_df['text'].fillna('')
+        true_df['combined'] = true_df['title'].fillna('') + ' ' + true_df['text'].fillna('')
+        
+        # Create labels (1=Fake, 0=Real)
+        fake_df['label'] = 1
+        true_df['label'] = 0
+        
+        # Combine datasets
+        combined_df = pd.concat([fake_df[['combined', 'label']], true_df[['combined', 'label']]], ignore_index=True)
+        
+        # Shuffle the dataset
+        combined_df = combined_df.sample(frac=1, random_state=42).reset_index(drop=True)
+        
+        print(f"  ✓ Total dataset size: {len(combined_df)} articles")
+        
+        return combined_df['combined'].tolist(), combined_df['label'].tolist()
+        
+    except Exception as e:
+        print(f"  ✗ Error loading dataset: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None
+
+def fine_tune_model(model_to_train, train_texts, train_labels, val_texts, val_labels):
+    """Fine-tune BERT on fake and real news dataset"""
     
-    # Training examples - FAKE NEWS patterns
-    fake_news_examples = [
-        "BREAKING: Scientists discover teleportation is real! Shocking new study reveals 100% success rate!",
-        "Fictional research institute announces time travel breakthrough! This changes everything!",
-        "UNBELIEVABLE: Coffee makes you immortal according to secret study! Doctors hate this!",
-        "SHOCKING discovery: Anti-gravity technology found in ancient ruins! NASA won't tell you!",
-        "Breaking: Chrono-stratosphere layer discovered! Teleportation now possible!",
-        "Miracle cure discovered! Big Pharma hiding the truth from you!",
-        "NEVER seen before: Quantum healing crystals cure all diseases instantly!",
-        "Secret government project reveals unlimited energy source! They don't want you to know!",
-        "📰 BREAKING: Immortality serum created by fictional scientists! 100% effective!",
-        "Shocking: Made-up institute discovers anti-aging miracle! Click to learn more!",
-        "UNBELIEVABLE breakthrough: Fictional Project Chronos reveals teleportation layer!",
-        "Scientists from imaginary university discover time travel! This rewrites everything!",
-        "SHOCKING: Made-up study shows drinking water makes you fly! 100% proven!",
-        "Breaking news: Fake research center announces anti-gravity discovery!",
-        "Mythical scientists reveal secret to immortality! Governments hiding the truth!"
-    ]
-    
-    # Training examples - REAL NEWS patterns
-    real_news_examples = [
-        "The Federal Reserve announced a quarter-point interest rate adjustment following economic indicators.",
-        "New climate data from NOAA shows temperature trends consistent with long-term patterns.",
-        "Stock markets closed mixed today as investors await quarterly earnings reports.",
-        "Research published in Nature journal describes advances in renewable energy efficiency.",
-        "Senate committee votes on proposed healthcare legislation after months of debate.",
-        "University study finds correlation between exercise and cardiovascular health improvements.",
-        "Central bank maintains current monetary policy amid stable inflation rates.",
-        "Archaeological team uncovers artifacts dating to early Bronze Age settlement.",
-        "Technology company reports quarterly revenue increase of 12 percent year-over-year.",
-        "International trade negotiations continue as delegates meet for third round of talks.",
-        "The Supreme Court heard arguments today on a case involving digital privacy rights.",
-        "Researchers at MIT published findings on battery technology in academic journal.",
-        "Local government approves infrastructure spending plan for fiscal year.",
-        "Healthcare providers report increased vaccination rates following public campaign.",
-        "Economic data shows moderate growth in manufacturing sector this quarter."
-    ]
-    
-    # Prepare training data
-    train_texts = fake_news_examples + real_news_examples
-    train_labels = [1] * len(fake_news_examples) + [0] * len(real_news_examples)  # 1=Fake, 0=Real
+    print(f"\nTraining on {len(train_texts)} samples, validating on {len(val_texts)} samples")
     
     # Training setup
     model_to_train.train()
     optimizer = AdamW(model_to_train.parameters(), lr=2e-5)
     
-    # Training loop - multiple epochs for better learning
-    print("Training BERT model on fake news patterns...")
-    for epoch in range(10):  # 10 epochs for better learning
+    # Training parameters
+    batch_size = 8  # Process 8 articles at a time
+    num_epochs = 3  # 3 epochs for large dataset
+    
+    print(f"\nTraining BERT model on News Dataset...")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Number of epochs: {num_epochs}")
+    print(f"  Learning rate: 2e-5\n")
+    
+    for epoch in range(num_epochs):
+        model_to_train.train()
         total_loss = 0
         correct = 0
+        num_batches = 0
         
-        for text, label in zip(train_texts, train_labels):
-            # Tokenize
-            inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
-            labels = torch.tensor([label])
+        # Training loop with batches
+        for i in range(0, len(train_texts), batch_size):
+            batch_texts = train_texts[i:i+batch_size]
+            batch_labels = train_labels[i:i+batch_size]
+            
+            # Tokenize batch
+            inputs = tokenizer(
+                batch_texts, 
+                return_tensors="pt", 
+                truncation=True, 
+                padding=True, 
+                max_length=512
+            )
+            labels = torch.tensor(batch_labels)
             
             # Forward pass
             outputs = model_to_train(**inputs, labels=labels)
             loss = outputs.loss
             
-            # Get prediction
+            # Get predictions
             logits = outputs.logits
-            pred = torch.argmax(logits, dim=1).item()
-            if pred == label:
-                correct += 1
+            preds = torch.argmax(logits, dim=1)
+            correct += (preds == labels).sum().item()
             
             # Backward pass
             optimizer.zero_grad()
@@ -90,10 +113,50 @@ def fine_tune_model(model_to_train):
             optimizer.step()
             
             total_loss += loss.item()
+            num_batches += 1
+            
+            # Print progress every 100 batches
+            if num_batches % 100 == 0:
+                print(f"  Epoch {epoch + 1}/{num_epochs} - Batch {num_batches}/{len(train_texts)//batch_size} - Loss: {loss.item():.4f}")
         
-        avg_loss = total_loss / len(train_texts)
-        accuracy = (correct / len(train_texts)) * 100
-        print(f"  Epoch {epoch + 1}/10 - Loss: {avg_loss:.4f} - Accuracy: {accuracy:.1f}%")
+        # Calculate training metrics
+        avg_loss = total_loss / num_batches
+        train_accuracy = (correct / len(train_texts)) * 100
+        
+        # Validation
+        model_to_train.eval()
+        val_correct = 0
+        val_loss = 0
+        val_batches = 0
+        
+        with torch.no_grad():
+            for i in range(0, len(val_texts), batch_size):
+                batch_texts = val_texts[i:i+batch_size]
+                batch_labels = val_labels[i:i+batch_size]
+                
+                inputs = tokenizer(
+                    batch_texts,
+                    return_tensors="pt",
+                    truncation=True,
+                    padding=True,
+                    max_length=512
+                )
+                labels = torch.tensor(batch_labels)
+                
+                outputs = model_to_train(**inputs, labels=labels)
+                logits = outputs.logits
+                preds = torch.argmax(logits, dim=1)
+                
+                val_correct += (preds == labels).sum().item()
+                val_loss += outputs.loss.item()
+                val_batches += 1
+        
+        val_accuracy = (val_correct / len(val_texts)) * 100
+        val_avg_loss = val_loss / val_batches
+        
+        print(f"\n  📊 Epoch {epoch + 1}/{num_epochs} Results:")
+        print(f"     Training   - Loss: {avg_loss:.4f} | Accuracy: {train_accuracy:.2f}%")
+        print(f"     Validation - Loss: {val_avg_loss:.4f} | Accuracy: {val_accuracy:.2f}%\n")
     
     model_to_train.eval()
     print("✓ BERT fine-tuning complete! Model ready for predictions.")
@@ -224,9 +287,32 @@ try:
     print("Loading BERT tokenizer and base model...")
     tokenizer = BertTokenizer.from_pretrained(MODEL_NAME)
     model = BertForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=2)
+    print("  ✓ BERT model loaded successfully!\n")
     
-    print("Fine-tuning BERT on fake news dataset...")
-    model = fine_tune_model(model)
+    print("Loading News Dataset...")
+    all_texts, all_labels = load_dataset()
+    
+    if all_texts is None or all_labels is None:
+        raise Exception("Failed to load dataset")
+    
+    # Split dataset: 80% training, 20% validation
+    # Using a smaller subset for faster training (you can increase this)
+    subset_size = min(5000, len(all_texts))  # Use 5000 samples or all if less
+    print(f"\nUsing {subset_size} samples for training (from {len(all_texts)} total)")
+    print("Note: You can increase subset_size in the code for more comprehensive training\n")
+    
+    texts_subset = all_texts[:subset_size]
+    labels_subset = all_labels[:subset_size]
+    
+    train_texts, val_texts, train_labels, val_labels = train_test_split(
+        texts_subset, labels_subset, test_size=0.2, random_state=42, stratify=labels_subset
+    )
+    
+    print(f"Dataset split: {len(train_texts)} training, {len(val_texts)} validation")
+    
+    print("\nFine-tuning BERT on News Dataset...")
+    print("This may take several minutes...\n")
+    model = fine_tune_model(model, train_texts, train_labels, val_texts, val_labels)
     
     print("\n✓ BERT model loaded and fine-tuned successfully!")
     print("="*60 + "\n")
