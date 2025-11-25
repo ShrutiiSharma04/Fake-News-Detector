@@ -6,15 +6,38 @@ const FakeNewsDetector = () => {
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState(null);
   const [activeTab, setActiveTab] = useState('detector');
+  const [apiStatus, setApiStatus] = useState('checking');
+
+  // Check backend API health on component mount
+  useEffect(() => {
+    checkApiHealth();
+  }, []);
+
+  const checkApiHealth = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/health');
+      if (response.ok) {
+        setApiStatus('connected');
+      } else {
+        setApiStatus('disconnected');
+      }
+    } catch (error) {
+      setApiStatus('disconnected');
+    }
+  };
 
   const sampleNews = [
     {
       type: 'fake',
-      text: 'BREAKING: Scientists discover that drinking coffee makes you immortal! New study shows 100% of coffee drinkers never age!',
+      text: '📰 BREAKING: Scientists discover that drinking coffee makes you immortal! New study shows 100% of coffee drinkers never age! Fictional institute reveals shocking data!',
     },
     {
       type: 'real',
-      text: 'The Federal Reserve announced a quarter-point interest rate cut today, citing improved inflation trends and stable employment figures.',
+      text: 'The Federal Reserve announced a quarter-point interest rate cut today, citing improved inflation trends and stable employment figures according to recent economic data.',
+    },
+    {
+      type: 'fake',
+      text: 'Breaking: Scientists Discover a Silent Layer of Earth\'s Atmosphere That Rewrites Climate Models. Globe-Spanning Teleportation Potential Unearthed in the Stratosphere. JAIPUR, INDIA – In a finding that has sent shockwaves through the geophysical and telecommunications communities, a team of international researchers, spearheaded by the fictional "Project Chronos" initiative, has announced the definitive discovery of a previously undetected atmospheric layer.',
     }
   ];
 
@@ -24,63 +47,33 @@ const FakeNewsDetector = () => {
     setAnalyzing(true);
     setResult(null);
 
-    // Simulate API call to deep learning model
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    try {
+      // Call Python backend API with BERT
+      const response = await fetch('http://localhost:5000/api/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: text })
+      });
 
-    // Enhanced NLP analysis with more sophisticated detection
-    const features = {
-      sensationalWords: (text.match(/BREAKING|SHOCKING|UNBELIEVABLE|MIRACLE|NEVER|ALWAYS|100%|DISCOVER|UNEARTHED/gi) || []).length,
-      exclamationMarks: (text.match(/!/g) || []).length,
-      allCaps: (text.match(/\b[A-Z]{4,}\b/g) || []).length,
-      length: text.length,
-      hasNumbers: /\d/.test(text),
-      fictionalTerms: (text.match(/fictional|mythical|imaginary|made-up|fake|hoax/gi) || []).length,
-      unrealisticClaims: (text.match(/teleportation|time.travel|immortal|anti.gravity|unlimited.energy/gi) || []).length,
-      vagueLocation: (text.match(/undisclosed|secret|hidden|mysterious/gi) || []).length,
-      emojis: (text.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length,
-      quotedFictional: text.toLowerCase().includes('termed') || text.toLowerCase().includes('nicknamed'),
-      scientificJargon: (text.match(/chrono|quantum|nano|hyper|mega|ultra/gi) || []).length,
-    };
-
-    // Enhanced scoring algorithm
-    let fakeScore = 0;
-    
-    // Critical fake news indicators
-    if (features.fictionalTerms > 0) fakeScore += 50; // Mentions "fictional"
-    if (features.unrealisticClaims > 0) fakeScore += 40; // Teleportation, etc.
-    if (text.toLowerCase().includes('project chronos') || text.toLowerCase().includes('chrono-stratosphere')) fakeScore += 45;
-    
-    // Moderate indicators
-    if (features.sensationalWords > 2) fakeScore += 25;
-    if (features.exclamationMarks > 2) fakeScore += 15;
-    if (features.allCaps > 1) fakeScore += 20;
-    if (features.emojis > 0) fakeScore += 15; // News articles rarely use emojis
-    if (features.scientificJargon > 2) fakeScore += 20; // Too much pseudo-science
-    
-    // Context clues
-    if (text.length < 100) fakeScore += 10;
-    if (text.includes('sent shockwaves') || text.includes('rewrites')) fakeScore += 15;
-    
-    const confidence = Math.min(98, 60 + (fakeScore * 0.4) + Math.random() * 15);
-    const prediction = fakeScore > 35 ? 'Likely Fake' : 'Likely Real';
-
-    setResult({
-      prediction,
-      confidence: confidence.toFixed(1),
-      features,
-      analysis: {
-        sentiment: fakeScore > 30 ? 'Highly Sensational' : 'Neutral/Factual',
-        credibility: fakeScore > 30 ? 'Low' : 'High',
-        emotionalTone: fakeScore > 30 ? 'Manipulative' : 'Informative',
-      },
-      breakdown: {
-        linguistic: Math.max(10, 100 - fakeScore * 0.8).toFixed(1),
-        semantic: Math.max(15, 100 - fakeScore * 0.6).toFixed(1),
-        contextual: Math.max(20, 100 - fakeScore * 0.7).toFixed(1),
+      if (!response.ok) {
+        throw new Error('API request failed');
       }
-    });
 
-    setAnalyzing(false);
+      const data = await response.json();
+      setResult(data);
+      setApiStatus('connected');
+      
+    } catch (error) {
+      console.error('Error analyzing text:', error);
+      setApiStatus('disconnected');
+      
+      // Show error message to user
+      alert('Could not connect to the backend API. Please make sure the Python server is running on http://localhost:5000');
+    } finally {
+      setAnalyzing(false);
+    }
   };
 
   const loadSample = (sample) => {
@@ -99,6 +92,19 @@ const FakeNewsDetector = () => {
             </div>
             <div>
               <h1 className="text-4xl font-bold tracking-tight">Fake News Detection System</h1>
+              <div className="flex items-center gap-3 mt-2">
+                <p className="text-slate-300 text-sm">Powered by BERT Transformer Model</p>
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${
+                    apiStatus === 'connected' ? 'bg-green-400' : 
+                    apiStatus === 'disconnected' ? 'bg-red-400' : 'bg-yellow-400'
+                  }`}></div>
+                  <span className="text-xs text-slate-300">
+                    {apiStatus === 'connected' ? 'API Connected' : 
+                     apiStatus === 'disconnected' ? 'API Disconnected' : 'Checking...'}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
           
@@ -172,21 +178,34 @@ const FakeNewsDetector = () => {
 
                 <button
                   onClick={analyzeText}
-                  disabled={!text.trim() || analyzing}
+                  disabled={!text.trim() || analyzing || apiStatus === 'disconnected'}
                   className="w-full mt-4 bg-slate-800 text-white py-4 rounded-lg font-semibold text-lg hover:bg-slate-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {analyzing ? (
                     <>
                       <Loader2 className="w-5 h-5 inline mr-2 animate-spin" />
-                      Analyzing with AI...
+                      Analyzing with BERT AI...
+                    </>
+                  ) : apiStatus === 'disconnected' ? (
+                    <>
+                      <AlertCircle className="w-5 h-5 inline mr-2" />
+                      Backend Disconnected
                     </>
                   ) : (
                     <>
                       <Brain className="w-5 h-5 inline mr-2" />
-                      Analyze Article
+                      Analyze with BERT
                     </>
                   )}
                 </button>
+
+                {apiStatus === 'disconnected' && (
+                  <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-sm text-red-700">
+                      ⚠️ Backend API is not running. Start the Python server: <code className="bg-red-100 px-2 py-1 rounded">python app.py</code>
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Sample Articles */}
@@ -229,9 +248,9 @@ const FakeNewsDetector = () => {
                         }`}>{result.prediction}</h3>
                       </div>
                       {result.prediction === 'Likely Fake' ? (
-                        <AlertCircle className={`w-16 h-16 text-red-600`} />
+                        <AlertCircle className="w-16 h-16 text-red-600" />
                       ) : (
-                        <CheckCircle className={`w-16 h-16 text-green-600`} />
+                        <CheckCircle className="w-16 h-16 text-green-600" />
                       )}
                     </div>
                     
@@ -249,6 +268,12 @@ const FakeNewsDetector = () => {
                         />
                       </div>
                     </div>
+
+                    {result.model_info && (
+                      <div className="mt-4 p-3 bg-white/60 rounded-lg border border-gray-200">
+                        <p className="text-xs text-gray-600 font-medium">Model: {result.model_info.model_used}</p>
+                      </div>
+                    )}
                   </div>
 
                   {/* Analysis Details */}
@@ -322,7 +347,7 @@ const FakeNewsDetector = () => {
                     <Brain className="w-12 h-12 text-slate-600" />
                   </div>
                   <h3 className="text-2xl font-bold text-gray-800 mb-3">Ready to Analyze</h3>
-                  <p className="text-gray-600">Enter a news article and click "Analyze Article" to get started with AI-powered fake news detection.</p>
+                  <p className="text-gray-600">Enter a news article and click "Analyze with BERT" to get started with AI-powered fake news detection.</p>
                 </div>
               )}
             </div>
@@ -357,15 +382,15 @@ const FakeNewsDetector = () => {
               <div className="space-y-3 text-sm">
                 <div className="p-3 bg-slate-50 rounded-lg border border-gray-200">
                   <p className="font-semibold text-slate-800">Base Model</p>
-                  <p className="text-gray-600">BERT (Transformers)</p>
+                  <p className="text-gray-600">BERT (bert-base-uncased)</p>
                 </div>
                 <div className="p-3 bg-slate-50 rounded-lg border border-gray-200">
-                  <p className="font-semibold text-slate-800">Fine-tuning</p>
-                  <p className="text-gray-600">Custom News Dataset</p>
+                  <p className="font-semibold text-slate-800">Framework</p>
+                  <p className="text-gray-600">PyTorch + Transformers</p>
                 </div>
                 <div className="p-3 bg-slate-50 rounded-lg border border-gray-200">
-                  <p className="font-semibold text-slate-800">Features</p>
-                  <p className="text-gray-600">NLP + Linguistic Patterns</p>
+                  <p className="font-semibold text-slate-800">Approach</p>
+                  <p className="text-gray-600">Hybrid (BERT + Rule-based)</p>
                 </div>
               </div>
             </div>
